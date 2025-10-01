@@ -305,6 +305,13 @@ def _compose_assistant_message(
             f"If anything feels life-threatening, call emergency services immediately (dial {ambulance_number}).\n\n"
         )
 
+    caution_note = ""
+    if not verification_note and (user_trend == "worse" or str(severity).lower() in {"high", "severe"}):
+        caution_note = (
+            "\n\n⚠️ I noticed something that may conflict with our safety checks. "
+            "Please double-check with emergency services or a medical professional."
+        )
+
     response = dedent(f"""
         I’m here to help.
 
@@ -316,7 +323,7 @@ def _compose_assistant_message(
         {steps_text}
     """).strip()
 
-    response = response + verification_note
+    response = response + verification_note + caution_note
 
     if acknowledgement:
         response = response + "\n\n" + acknowledgement
