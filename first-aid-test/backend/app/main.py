@@ -39,10 +39,32 @@ BODY_PART_KEYWORDS = {
     "leg", "knee", "ankle", "foot", "toe", "skin"
 }
 
-TREND_KEYWORDS = {
-    "worse": ["worse", "getting worse", "more", "heavier", "increasing", "spreading"],
-    "better": ["better", "improving", "less", "lighter"],
-    "same": ["same", "unchanged", "no change", "stable"],
+TREND_PATTERNS = {
+    "worse": [
+        r"\bgetting worse\b",
+        r"\bworsening\b",
+        r"\bworse\b",
+        r"\bheavier\b",
+        r"\bincreasing\b",
+        r"\bspreading\b",
+        r"\bmore (?:pain|bleeding|swelling|numbness)\b",
+    ],
+    "better": [
+        r"\bgetting better\b",
+        r"\bbetter\b",
+        r"\bimproving\b",
+        r"\bimproved\b",
+        r"\bless (?:pain|bleeding|swelling)\b",
+        r"\blighter\b",
+        r"\bsubsiding\b",
+    ],
+    "same": [
+        r"\babout the same\b",
+        r"\bstaying the same\b",
+        r"\bno change\b",
+        r"\bunchanged\b",
+        r"\bstable\b",
+    ],
 }
 
 
@@ -141,9 +163,9 @@ def _detect_trend(text: str) -> Optional[str]:
     if not text:
         return None
     lowered = text.lower()
-    for label, keywords in TREND_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in lowered:
+    for label, patterns in TREND_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, lowered):
                 return label
     return None
 
@@ -307,7 +329,11 @@ def _compose_assistant_message(
         )
 
     caution_note = ""
-    if not verification_note and (user_trend == "worse" or str(severity).lower() in {"high", "severe"}):
+    severity_level = str(severity).lower()
+    if not verification_note and (
+        severity_level in {"high", "severe", "serious"}
+        or (user_trend == "worse" and severity_level not in {"low", "mild"})
+    ):
         caution_note = (
             "\n\n⚠️ I noticed something that may conflict with our safety checks. "
             "Please double-check with emergency services or a medical professional."
