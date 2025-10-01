@@ -45,6 +45,17 @@ TREND_KEYWORDS = {
     "same": ["same", "unchanged", "no change", "stable"],
 }
 
+RECOVERY_PATTERNS = [
+    r"\ball good now\b",
+    r"\ball better now\b",
+    r"\bfeeling (?:fine|okay|ok) now\b",
+    r"\bno (?:longer|more) (?:hurting|hurt|pain|bleeding)\b",
+    r"\bnot (?:painful|hurting) anymore\b",
+    r"\bpain (?:is )?gone\b",
+    r"\bbleeding (?:has )?stopped\b",
+    r"\bit'?s healed now\b",
+]
+
 
 def _detect_location_known(text: str) -> bool:
     if not text:
@@ -64,7 +75,16 @@ def _detect_trend(text: str) -> Optional[str]:
     return None
 
 
+def _detect_recovery(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(re.search(pattern, lowered) for pattern in RECOVERY_PATTERNS)
+
+
 def _acknowledge_user_update(user_text: str) -> str:
+    if _detect_recovery(user_text):
+        return "I’m really glad to hear those symptoms have cleared up."
     trend = _detect_trend(user_text)
     if trend == "worse":
         return "Thanks for telling me it’s getting worse — let’s work to slow it down."
@@ -84,6 +104,9 @@ def _craft_follow_up_question(result: dict, history: List[ChatMessage], user_tex
         msg.content for msg in history if getattr(msg, "role", None) == "user"
     )
     combined_context = f"{user_history_text}\n{user_text}".strip()
+
+    if _detect_recovery(combined_context):
+        return ""
 
     location_known = _detect_location_known(combined_context)
     trend_known = _detect_trend(combined_context)
@@ -146,6 +169,15 @@ def _compose_assistant_message(
         return (
             "I want to be sure I understand the situation. Could you share what happened, where it hurts, and how severe it is?"
         )
+
+    combined_context = " \n".join(
+        msg.content for msg in history if getattr(msg, "role", None) == "user"
+    )
+    combined_context = f"{combined_context}\n{user_text}".strip()
+    if _detect_recovery(combined_context):
+        return dedent("""
+            I’m really glad to hear things are feeling better now. If anything changes or the symptoms return, reach out to a healthcare professional or call your local emergency number. Take care!
+        """).strip()
 
     triage = result.get("triage", {})
     severity = triage.get("severity") or triage.get("level") or "unknown"
