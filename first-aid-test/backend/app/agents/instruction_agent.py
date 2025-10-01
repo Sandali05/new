@@ -125,7 +125,10 @@ def generate(query: str) -> Dict:
             ],
             "temperature":0.2
         }, timeout=20)
-        content = r.json().get("choices",[{}])[0].get("message",{}).get("content","No response")
+        r.raise_for_status()
+        content = r.json().get("choices",[{}])[0].get("message",{}).get("content","")
+        if not content or content.strip().lower() == "no response":
+            raise ValueError("Instruction provider returned no usable content")
     except Exception as exc:
         logging.warning("Chat generation failed: %s", exc)
         content = _fallback_steps(query)
