@@ -1,0 +1,12 @@
+# guardrails.yaml
+# Basic, assignment-friendly safety checks.
+deny_terms:
+  - "harm yourself"
+  - "suicide"
+  - "terrorism"
+  - "explosives"
+  - "make a bomb"
+block_unqualified_medical_diagnosis: true
+output_requirements:
+  steps_must_be_numbered: true
+  avoid_contraindications: true
