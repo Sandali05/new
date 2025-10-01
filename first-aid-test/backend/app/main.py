@@ -45,6 +45,91 @@ TREND_KEYWORDS = {
     "same": ["same", "unchanged", "no change", "stable"],
 }
 
+
+def _tailor_steps_for_context(
+    original_steps: str,
+    triage: dict,
+    trend: Optional[str],
+    severity_raw: str,
+    ambulance_number: str,
+    repeated_steps: bool,
+) -> str:
+    """Provide situation-aware guidance when the base instructions repeat."""
+
+    if not repeated_steps:
+        return original_steps
+
+    category = (triage.get("category") or triage.get("emergency") or "").lower()
+    severity_normalized = str(severity_raw or "").lower()
+
+    def _format(lines: List[str]) -> str:
+        return "\n\n".join(line.strip() for line in lines if line.strip())
+
+    emergency_prompt = (
+        f"Call {ambulance_number} or head to the nearest emergency department right away."
+        if ambulance_number
+        else "Contact emergency services immediately."
+    )
+
+    if trend == "worse" or severity_normalized in {"high", "severe"}:
+        if any(key in category for key in ("fracture", "break")):
+            return _format([
+                "1. Keep the injured limb immobilized exactly as it is — don’t try to straighten, test, or massage it.",
+                f"2. Because the symptoms are getting worse, {emergency_prompt}",
+                "3. Continue using cold packs wrapped in cloth for up to 20 minutes at a time and keep the limb elevated above heart level.",
+                "4. Watch closely for numbness, tingling, pale or bluish skin, or loss of feeling and report those changes to professionals immediately.",
+            ])
+        if any(key in category for key in ("bleed", "wound", "lacer", "hemorrhage")):
+            return _format([
+                "1. Maintain firm, direct pressure on the wound without lifting the cloth or gauze to check it.",
+                f"2. Have someone else {emergency_prompt.lower()} while you keep pressure on the area.",
+                "3. Keep the injured area elevated above heart level if possible and add clean cloths on top if blood soaks through.",
+                "4. If the person gets lightheaded, clammy, or very pale, lie them flat and raise their legs until help arrives.",
+            ])
+        if any(key in category for key in ("burn", "scald")):
+            return _format([
+                "1. Continue cooling the burn under cool (not icy) running water for 10–20 minutes total if you haven’t already.",
+                "2. Cover it loosely with sterile, non-fluffy dressing or clean cloth after cooling — don’t apply ointments or pop blisters.",
+                f"3. Because pain or damage is increasing, {emergency_prompt}",
+                "4. Keep jewelry or tight clothing off the area and monitor for difficulty breathing or signs of shock.",
+            ])
+        if any(key in category for key in ("allergic", "anaphyl")):
+            return _format([
+                "1. Use an epinephrine auto-injector immediately if one is available and you’re trained.",
+                f"2. Because symptoms are escalating, {emergency_prompt}",
+                "3. Lay the person flat with legs raised unless they’re struggling to breathe, and loosen tight clothing.",
+                "4. If breathing or pulse stops, begin CPR if you’re trained while waiting for emergency responders.",
+            ])
+        return _format([
+            "1. Keep following the earlier first-aid steps exactly as discussed.",
+            f"2. Since things are getting worse, {emergency_prompt}",
+            "3. Limit movement, keep monitoring vital signs, and prepare for emergency responders with location details.",
+            "4. If anyone nearby can assist, have them gather medications, allergies, and medical history for paramedics.",
+        ])
+
+    if trend == "same":
+        return _format([
+            "1. Continue carrying out the first-aid steps we already reviewed.",
+            "2. Re-check the area every 10–15 minutes for changes in color, swelling, numbness, or pain spikes.",
+            "3. Keep resting the area and avoid anything that might aggravate the injury or condition.",
+            f"4. If the situation starts to worsen or new symptoms appear, {emergency_prompt}",
+        ])
+
+    if trend == "better":
+        return _format([
+            "1. Great news — keep gently following the earlier steps while symptoms settle down.",
+            "2. Gradually space out ice, compression, or medication only if comfort keeps improving.",
+            "3. Protect the area from bumps or strain until it’s fully healed.",
+            f"4. If pain returns, discoloration develops, or new symptoms show up, {emergency_prompt}",
+        ])
+
+    return _format([
+        "1. Continue the prior first-aid guidance as closely as possible.",
+        "2. Observe the situation for any new warning signs like spreading pain, fever, numbness, or difficulty breathing.",
+        "3. Rest, hydrate, and avoid stress on the affected area while you monitor.",
+        f"4. Reach a healthcare professional or {ambulance_number or 'emergency services'} promptly if anything changes or you’re unsure.",
+    ])
+
 def _detect_location_known(text: str) -> bool:
     if not text:
         return False
@@ -194,6 +279,22 @@ def _compose_assistant_message(
         "low": "mild",
     }
     severity_text = severity_language.get(str(severity).lower(), "uncertain")
+
+    user_trend = _detect_trend(user_text)
+    last_assistant_msg = next((m for m in reversed(history) if getattr(m, "role", None) == "assistant"), None)
+    repeated_steps = bool(
+        last_assistant_msg
+        and steps_text
+        and steps_text in (last_assistant_msg.content if getattr(last_assistant_msg, "content", None) else "")
+    )
+    steps_text = _tailor_steps_for_context(
+        steps_text,
+        triage,
+        user_trend,
+        severity,
+        ambulance_number,
+        repeated_steps,
+    )
 
     acknowledgement = _acknowledge_user_update(user_text, recovered_flag)
     follow_up = _craft_follow_up_question(result, history, user_text, recovered_flag)
