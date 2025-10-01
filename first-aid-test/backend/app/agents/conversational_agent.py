@@ -18,7 +18,8 @@ from ..services.risk_confidence import score_risk_confidence
 KNOWN_EMERGENCY_TERMS = {
     "bleeding", "bruise", "burn", "scald", "sprain", "strain",
     "fracture", "break", "choke", "allergic", "anaphylaxis", "faint",
-    "dizzy", "headache", "migraine", "cut", "laceration", "wound"
+    "dizzy", "headache", "migraine", "cut", "laceration", "wound",
+    "pain",
 }
 
 

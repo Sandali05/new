@@ -228,11 +228,18 @@ def _compose_assistant_message(
     recovery: Optional[dict],
 ) -> str:
     conversation_meta = result.get("conversation", {}) if isinstance(result, dict) else {}
+    recovered_flag = bool(recovery and recovery.get("recovered"))
+
     if result.get("error"):
         return (
             "I’m sorry — something went wrong while processing that. "
             "Please try again, and if it keeps failing seek emergency care if you’re in danger."
         )
+
+    if recovered_flag:
+        return dedent("""
+            I’m really glad to hear things are feeling better now. If anything changes or the symptoms return, reach out to a healthcare professional or call your local emergency number. Take care!
+        """).strip()
 
     if conversation_meta.get("needs_clarification"):
         prompt = conversation_meta.get("clarification_prompt")
@@ -241,12 +248,6 @@ def _compose_assistant_message(
         return (
             "I want to be sure I understand the situation. Could you share what happened, where it hurts, and how severe it is?"
         )
-
-    recovered_flag = bool(recovery and recovery.get("recovered"))
-    if recovered_flag:
-        return dedent("""
-            I’m really glad to hear things are feeling better now. If anything changes or the symptoms return, reach out to a healthcare professional or call your local emergency number. Take care!
-        """).strip()
 
     triage = result.get("triage", {})
     severity = triage.get("severity") or triage.get("level") or "unknown"
