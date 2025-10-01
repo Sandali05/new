@@ -6,4 +6,5 @@ __pycache__/
 *.pyc
 # Env/OS
 .env
+!backend/.env
 .DS_Store
