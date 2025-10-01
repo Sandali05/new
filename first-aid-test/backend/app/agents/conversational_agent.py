@@ -60,10 +60,12 @@ def handle_message(
 
         # 1) Security & privacy layer
         sec = security_agent.protect(context_text)
-        sanitized = sec.get("sanitized", context_text)
+
+        latest_security = security_agent.protect(user_input)
+        sanitized_latest = latest_security.get("sanitized", user_input)
 
         # 2) Emergency classification
-        triage = emergency_classifier.classify(sanitized)
+        triage = emergency_classifier.classify(sanitized_latest)
 
         # 2b) Detect recovery cues so downstream components can conclude safely.
         recovery = recovery_agent.detect(history or [], user_input)
@@ -78,7 +80,11 @@ def handle_message(
             # Default values are already set, so we can just log and continue
 
         # 4) Generate first aid instructions grounded on KB
-        instructions = instruction_agent.generate(sanitized)
+        instructions = instruction_agent.generate(
+            sanitized_latest,
+            category=str(triage.get("category") or ""),
+            severity=str(triage.get("severity") or ""),
+        )
 
         # 5) Verify against guardrails
         instruction_steps = instructions.get("steps")
@@ -102,7 +108,7 @@ def handle_message(
         conversation_meta["recovered"] = recovery.get("recovered")
 
         response: Dict = {
-            "security": sec,
+            "security": {**sec, "latest_sanitized": sanitized_latest},
             "triage": triage,
             "tools": {"emergency_numbers": em_numbers, "maps": maps_hint},
             "instructions": instructions,

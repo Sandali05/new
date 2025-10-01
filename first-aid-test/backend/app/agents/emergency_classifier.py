@@ -87,13 +87,22 @@ def classify(text: str) -> Dict:
 
     fallback = _rule_based_classification(text)
 
-    if not data.get("category") or data.get("category", "").lower() == "unknown":
+    category_value = str(data.get("category", "")).strip()
+    generic_categories = {"unknown", "", "emergency", "medical emergency", "concern", "issue", "situation"}
+
+    if not category_value or category_value.lower() in generic_categories:
         data.update(fallback)
     elif fallback.get("keywords") and not data.get("keywords"):
         data["keywords"] = fallback["keywords"]
 
+    if not data.get("category"):
+        data["category"] = fallback.get("category")
+
     severity = str(data.get("severity", "")).lower()
     if severity not in {"low", "medium", "high"}:
         data["severity"] = fallback["severity"]
+
+    if data.get("category") and isinstance(data["category"], str):
+        data["category"] = data["category"].strip()
 
     return data
