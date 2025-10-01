@@ -7,7 +7,7 @@ from .config import (
     ASTRA_DB_API_ENDPOINT, ASTRA_DB_KEYSPACE, ASTRA_DB_COLLECTION
 )
 from pydantic import BaseModel
-from .agents import conversational_agent
+from .agents import conversational_agent, recovery_agent
 from typing import List, Optional, Literal
 from textwrap import dedent
 import re
@@ -45,18 +45,6 @@ TREND_KEYWORDS = {
     "same": ["same", "unchanged", "no change", "stable"],
 }
 
-RECOVERY_PATTERNS = [
-    r"\ball good now\b",
-    r"\ball better now\b",
-    r"\bfeeling (?:fine|okay|ok) now\b",
-    r"\bno (?:longer|more) (?:hurting|hurt|pain|bleeding)\b",
-    r"\bnot (?:painful|hurting) anymore\b",
-    r"\bpain (?:is )?gone\b",
-    r"\bbleeding (?:has )?stopped\b",
-    r"\bit'?s healed now\b",
-]
-
-
 def _detect_location_known(text: str) -> bool:
     if not text:
         return False
@@ -75,15 +63,8 @@ def _detect_trend(text: str) -> Optional[str]:
     return None
 
 
-def _detect_recovery(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    return any(re.search(pattern, lowered) for pattern in RECOVERY_PATTERNS)
-
-
-def _acknowledge_user_update(user_text: str) -> str:
-    if _detect_recovery(user_text):
+def _acknowledge_user_update(user_text: str, recovered: bool) -> str:
+    if recovered:
         return "I’m really glad to hear those symptoms have cleared up."
     trend = _detect_trend(user_text)
     if trend == "worse":
@@ -95,7 +76,12 @@ def _acknowledge_user_update(user_text: str) -> str:
     return ""
 
 
-def _craft_follow_up_question(result: dict, history: List[ChatMessage], user_text: str) -> str:
+def _craft_follow_up_question(
+    result: dict,
+    history: List[ChatMessage],
+    user_text: str,
+    recovered: bool,
+) -> str:
     triage = result.get("triage", {}) if isinstance(result, dict) else {}
     category = (triage.get("category") or triage.get("emergency") or "concern").lower()
     severity = str(triage.get("severity") or triage.get("level") or "").lower()
@@ -105,7 +91,7 @@ def _craft_follow_up_question(result: dict, history: List[ChatMessage], user_tex
     )
     combined_context = f"{user_history_text}\n{user_text}".strip()
 
-    if _detect_recovery(combined_context):
+    if recovered:
         return ""
 
     location_known = _detect_location_known(combined_context)
@@ -154,6 +140,7 @@ def _compose_assistant_message(
     result: dict,
     user_text: str,
     history: List[ChatMessage],
+    recovery: Optional[dict],
 ) -> str:
     conversation_meta = result.get("conversation", {}) if isinstance(result, dict) else {}
     if result.get("error"):
@@ -170,11 +157,8 @@ def _compose_assistant_message(
             "I want to be sure I understand the situation. Could you share what happened, where it hurts, and how severe it is?"
         )
 
-    combined_context = " \n".join(
-        msg.content for msg in history if getattr(msg, "role", None) == "user"
-    )
-    combined_context = f"{combined_context}\n{user_text}".strip()
-    if _detect_recovery(combined_context):
+    recovered_flag = bool(recovery and recovery.get("recovered"))
+    if recovered_flag:
         return dedent("""
             I’m really glad to hear things are feeling better now. If anything changes or the symptoms return, reach out to a healthcare professional or call your local emergency number. Take care!
         """).strip()
@@ -211,8 +195,8 @@ def _compose_assistant_message(
     }
     severity_text = severity_language.get(str(severity).lower(), "uncertain")
 
-    acknowledgement = _acknowledge_user_update(user_text)
-    follow_up = _craft_follow_up_question(result, history, user_text)
+    acknowledgement = _acknowledge_user_update(user_text, recovered_flag)
+    follow_up = _craft_follow_up_question(result, history, user_text, recovered_flag)
 
     critical_hint = ""
     if str(severity).lower() in {"high", "severe"}:
@@ -315,7 +299,10 @@ def chat_continue(req: ChatContinueRequest):
     )
 
     # Compose assistant-style message
-    assistant_text = _compose_assistant_message(result, last_user, req.messages)
+    recovery_info = result.get("recovery") if isinstance(result, dict) else None
+    if recovery_info is None:
+        recovery_info = recovery_agent.detect(history_payload, last_user)
+    assistant_text = _compose_assistant_message(result, last_user, req.messages, recovery_info)
     new_messages = req.messages + [ChatMessage(role='assistant', content=assistant_text)]
 
     return {

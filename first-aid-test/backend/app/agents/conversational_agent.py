@@ -3,7 +3,13 @@
 from typing import Dict, List, Optional
 from difflib import get_close_matches
 import re
-from . import emergency_classifier, instruction_agent, verification_agent, security_agent
+from . import (
+    emergency_classifier,
+    instruction_agent,
+    verification_agent,
+    security_agent,
+    recovery_agent,
+)
 from ..services import mcp_server
 import logging
 from ..services.risk_confidence import score_risk_confidence
@@ -58,6 +64,9 @@ def handle_message(
         # 2) Emergency classification
         triage = emergency_classifier.classify(sanitized)
 
+        # 2b) Detect recovery cues so downstream components can conclude safely.
+        recovery = recovery_agent.detect(history or [], user_input)
+
         # 3) Get external tools via MCP-like adapter
         em_numbers, maps_hint = {}, {}
         try:
@@ -89,6 +98,7 @@ def handle_message(
         }
         if session_id:
             conversation_meta["session_id"] = session_id
+        conversation_meta["recovered"] = recovery.get("recovered")
 
         response: Dict = {
             "security": sec,
@@ -98,6 +108,7 @@ def handle_message(
             "verification": ver,
             "risk_confidence": risk,
             "conversation": conversation_meta,
+            "recovery": recovery,
         }
         if session_id:
             response["session"] = {"id": session_id}
