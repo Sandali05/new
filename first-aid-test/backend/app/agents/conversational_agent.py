@@ -42,7 +42,11 @@ def _detect_clarification_prompt(text: str) -> Optional[str]:
     return None
 
 
-def handle_message(user_input: str, history: Optional[List[Dict]] = None) -> Dict:
+def handle_message(
+    user_input: str,
+    history: Optional[List[Dict]] = None,
+    session_id: Optional[str] = None,
+) -> Dict:
     try:
         # 0) Pull recent conversational context so the pipeline sees the full story.
         context_text = _gather_user_context(history, user_input)
@@ -78,19 +82,27 @@ def handle_message(user_input: str, history: Optional[List[Dict]] = None) -> Dic
         clarification_prompt = _detect_clarification_prompt(user_input)
         needs_clarification = clarification_prompt is not None
 
-        return {
+        conversation_meta = {
+            "context": context_text,
+            "needs_clarification": needs_clarification,
+            "clarification_prompt": clarification_prompt,
+        }
+        if session_id:
+            conversation_meta["session_id"] = session_id
+
+        response: Dict = {
             "security": sec,
             "triage": triage,
             "tools": {"emergency_numbers": em_numbers, "maps": maps_hint},
             "instructions": instructions,
             "verification": ver,
             "risk_confidence": risk,
-            "conversation": {
-                "context": context_text,
-                "needs_clarification": needs_clarification,
-                "clarification_prompt": clarification_prompt,
-            }
+            "conversation": conversation_meta,
         }
+        if session_id:
+            response["session"] = {"id": session_id}
+
+        return response
     except Exception as e:
         logging.error(
             f"An error occurred in the conversational agent pipeline: {e}", exc_info=True)

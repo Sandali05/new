@@ -127,7 +127,11 @@ def _craft_follow_up_question(result: dict, history: List[ChatMessage], user_tex
     return "Is there anything new or changing that I should know about right now?"
 
 
-def _compose_assistant_message(result: dict, user_text: str, history: List[ChatMessage]) -> str:
+def _compose_assistant_message(
+    result: dict,
+    user_text: str,
+    history: List[ChatMessage],
+) -> str:
     conversation_meta = result.get("conversation", {}) if isinstance(result, dict) else {}
     if result.get("error"):
         return (
@@ -271,11 +275,20 @@ def chat_continue(req: ChatContinueRequest):
     last_user = user_msgs[-1].content
 
     # Run existing pipeline on the last user message
-    history = [m.dict() for m in req.messages]
-    result = conversational_agent.handle_message(last_user, history)
+    history_payload = [m.dict() for m in req.messages]
+    result = conversational_agent.handle_message(
+        last_user,
+        history=history_payload,
+        session_id=req.session_id,
+    )
 
     # Compose assistant-style message
     assistant_text = _compose_assistant_message(result, last_user, req.messages)
     new_messages = req.messages + [ChatMessage(role='assistant', content=assistant_text)]
 
-    return {"ok": True, "messages": [m.dict() for m in new_messages], "result": result}
+    return {
+        "ok": True,
+        "messages": [m.dict() for m in new_messages],
+        "result": result,
+        "session_id": req.session_id,
+    }
