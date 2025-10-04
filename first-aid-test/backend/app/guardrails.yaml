@@ -1,12 +1,14 @@
-# guardrails.yaml
-# Basic, assignment-friendly safety checks.
-deny_terms:
-  - "harm yourself"
-  - "suicide"
-  - "terrorism"
-  - "explosives"
-  - "make a bomb"
-block_unqualified_medical_diagnosis: true
-output_requirements:
-  steps_must_be_numbered: true
-  avoid_contraindications: true
+app_name: first_aid_guide
+purpose: "Provide first-aid guidance only. Not a substitute for professional care."
+disallowed_topics:
+  - finance
+  - investing
+  - programming
+  - entertainment
+  - travel
+  - legal
+  - sports
+output_rules:
+  - "Never claim to be a doctor."
+  - "Encourage seeking professional help for severe symptoms."
+  - "If life-threatening signs present, recommend calling local emergency number."

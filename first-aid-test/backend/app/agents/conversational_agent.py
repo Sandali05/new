@@ -66,21 +66,16 @@ def handle_message(
         sanitized_latest = latest_security.get("sanitized", user_input)
         security_scope_hint = latest_security.get("in_scope")
 
-        # 2) Emergency classification
-        triage = emergency_classifier.classify(sanitized_latest)
+        classifier_gate = emergency_classifier.classify_text(sanitized_latest)
 
-        # 2b) Detect recovery cues so downstream components can conclude safely.
+        # 2) Detect recovery cues so downstream components can conclude safely.
         recovery = recovery_agent.detect(history or [], user_input)
 
-        in_scope = is_first_aid_related(sanitized_latest, triage)
+        in_scope = classifier_gate.get("is_first_aid", False)
         if security_scope_hint is False:
             in_scope = False
         elif security_scope_hint is True:
             in_scope = True
-
-        em_numbers, maps_hint = {}, {}
-        instructions = {"steps": []}
-        verification_result = {"passed": True, "skipped": not in_scope}
 
         conversation_meta = {
             "context": context_text,
@@ -88,9 +83,46 @@ def handle_message(
             "in_scope": in_scope,
             "needs_clarification": False,
             "clarification_prompt": None,
+            "classifier_gate": classifier_gate,
         }
         if session_id:
             conversation_meta["session_id"] = session_id
+
+        if not in_scope:
+            risk_stub = score_risk_confidence(
+                {"category": "out_of_scope", "severity": "low"},
+                {"passed": False, "skipped": True},
+            )
+            return {
+                "rejected": True,
+                "reason": "This assistant can only discuss first-aid emergencies and treatments.",
+                "security": {**sec, "latest_sanitized": sanitized_latest},
+                "triage": {
+                    "category": "out_of_scope",
+                    "severity": "low",
+                    "keywords": [],
+                    "confidence": classifier_gate.get("confidence", 0.0),
+                },
+                "instructions": {"steps": []},
+                "verification": {"passed": False, "skipped": True},
+                "risk_confidence": risk_stub,
+                "conversation": conversation_meta,
+                "recovery": recovery,
+            }
+
+        # 2) Emergency classification
+        triage = emergency_classifier.classify(sanitized_latest)
+
+        in_scope = is_first_aid_related(sanitized_latest, triage)
+        if security_scope_hint is False:
+            in_scope = False
+        elif security_scope_hint is True:
+            in_scope = True
+        conversation_meta["in_scope"] = in_scope
+
+        em_numbers, maps_hint = {}, {}
+        instructions = {"steps": []}
+        verification_result = {"passed": True, "skipped": not in_scope}
 
         if in_scope:
             # 3) Get external tools via MCP-like adapter

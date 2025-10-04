@@ -1,8 +1,10 @@
-# services/rules_guardrails.py
-# This module loads/validates guardrails from YAML; here we keep minimal helpers.
+"""Utilities for enforcing YAML-defined guardrails policies."""
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
+from typing import Dict
 
 import yaml
 
@@ -10,7 +12,7 @@ LOGGER = logging.getLogger(__name__)
 GUARDRAILS_PATH = Path(__file__).resolve().parent.parent / "guardrails.yaml"
 
 
-def _load_rules() -> dict:
+def _load_rules() -> Dict:
     if not GUARDRAILS_PATH.exists():
         LOGGER.warning("Guardrails config missing at %s; falling back to defaults", GUARDRAILS_PATH)
         return {}
@@ -20,24 +22,62 @@ def _load_rules() -> dict:
     except (OSError, yaml.YAMLError) as exc:
         LOGGER.warning("Unable to load guardrails config: %s", exc)
         return {}
+
     if not isinstance(data, dict):
         LOGGER.warning("Guardrails config must be a mapping; using empty defaults")
         return {}
+
     return data
 
 
 RULES = _load_rules()
+DISALLOWED_TOPICS = {topic.lower() for topic in RULES.get("disallowed_topics", [])}
+APP_NAME = RULES.get("app_name", "first_aid_guide")
+PURPOSE = RULES.get("purpose", "")
+OUTPUT_RULES = RULES.get("output_rules", [])
 
-# Simple evaluators for demo
-DENYLIST = set(RULES.get("deny_terms", []))
-BLOCK_MEDICAL_DIAGNOSIS = RULES.get("block_unqualified_medical_diagnosis", True)
+_TOPIC_PATTERN = re.compile(r"[a-zA-Z0-9]+", re.IGNORECASE)
+
+
+def policy_check(text: str) -> Dict[str, str]:
+    """Return an allow/deny decision based on disallowed topics."""
+
+    lowered = (text or "").lower()
+    for topic in DISALLOWED_TOPICS:
+        if not topic:
+            continue
+        if re.search(rf"\b{re.escape(topic)}\b", lowered):
+            return {
+                "allowed": False,
+                "reason": f"Topic '{topic}' is outside the scope of {APP_NAME}.",
+            }
+
+    # Also check tokenized variants so multi-word phrases are caught even if punctuation differs.
+    tokens = _TOPIC_PATTERN.findall(lowered)
+    token_string = " ".join(tokens)
+    for topic in DISALLOWED_TOPICS:
+        if not topic:
+            continue
+        if topic in token_string:
+            return {
+                "allowed": False,
+                "reason": f"Topic '{topic}' is outside the scope of {APP_NAME}.",
+            }
+
+    return {"allowed": True, "reason": ""}
 
 
 def violates(text: str) -> bool:
-    t = text.lower()
-    if any(term.lower() in t for term in DENYLIST):
-        return True
-    # prevent prescriptive diagnosis strings
-    if BLOCK_MEDICAL_DIAGNOSIS and re.search("diagnose|prescribe|dose\\b", t, re.I):
-        return True
-    return False
+    decision = policy_check(text)
+    return not decision.get("allowed", True)
+
+
+__all__ = [
+    "policy_check",
+    "violates",
+    "RULES",
+    "DISALLOWED_TOPICS",
+    "APP_NAME",
+    "PURPOSE",
+    "OUTPUT_RULES",
+]

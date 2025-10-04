@@ -1,108 +1,120 @@
-# agents/emergency_classifier.py
-# Classifies user input into emergency categories using LLM prompting.
-from typing import Dict, List
-import logging
-import requests
-from ..config import MODEL_PREFERENCE, OPENAI_API_KEY, GROQ_API_KEY
+"""Emergency classifier heuristics and allow-list gate."""
+from __future__ import annotations
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+import re
+from typing import Dict, List, Tuple
 
-SYSTEM = "You are an emergency triage classifier. Return JSON with fields: category, severity (low/medium/high), keywords."
+from ..utils import FIRST_AID_KEYWORDS, basic_sanitize
+
+# Minimal rule-based mapping used after the allow-list gate passes.
+_CATEGORY_RULES: List[Tuple[str, List[str]]] = [
+    ("bleeding", ["bleed", "blood", "cut", "lacer", "wound", "hemorrh"]),
+    ("burn", ["burn", "scald", "blister", "char"]),
+    ("choking", ["chok", "airway", "heimlich", "cant breathe", "can't breathe"]),
+    ("allergic reaction", ["allerg", "anaphyl", "hives", "swelling"]),
+    ("bruise", ["bruise", "contusion"]),
+    ("sprain", ["sprain", "strain", "twist"]),
+    ("fracture", ["fracture", "broken bone", "break", "crack"]),
+    ("fainting", ["faint", "passed out", "dizzy", "lightheaded"]),
+    ("headache", ["headache", "migraine"]),
+    ("poisoning", ["poison", "overdose", "toxic"]),
+]
+
+_SEVERITY_HINTS = {
+    "bleeding": "medium",
+    "burn": "medium",
+    "choking": "high",
+    "allergic reaction": "high",
+    "fracture": "high",
+}
+
+_TOKEN_PATTERN = re.compile(r"[a-zA-Z]+", re.IGNORECASE)
 
 
-def _rule_based_classification(text: str) -> Dict:
-    """Provide an offline fallback categorisation when LLM access is unavailable."""
+def _tokenize(text: str) -> List[str]:
+    return _TOKEN_PATTERN.findall(text.lower())
 
+
+def classify_text(text: str) -> Dict[str, object]:
+    """Return allow-list based decision with a lightweight confidence score."""
+
+    sanitized = basic_sanitize(text)
+    tokens = _tokenize(sanitized)
+
+    hits: List[str] = []
+    for token in tokens:
+        if token in FIRST_AID_KEYWORDS:
+            hits.append(token)
+            continue
+        for keyword in FIRST_AID_KEYWORDS:
+            if len(keyword) < 4:
+                continue
+            if keyword in token or token in keyword:
+                hits.append(keyword)
+                break
+
+    # Include multi-word keyword matches (e.g., "first aid")
+    lowered = sanitized.lower()
+    for keyword in FIRST_AID_KEYWORDS:
+        if " " in keyword and keyword in lowered:
+            hits.append(keyword)
+
+    unique_hits: List[str] = []
+    for hit in hits:
+        if hit not in unique_hits:
+            unique_hits.append(hit)
+
+    confidence = 0.0
+    if unique_hits:
+        confidence = min(1.0, 0.45 + 0.15 * len(unique_hits))
+
+    label = unique_hits[0] if unique_hits else ""
+    is_first_aid = confidence >= 0.6
+
+    return {
+        "is_first_aid": is_first_aid,
+        "confidence": round(confidence, 3),
+        "label": label,
+    }
+
+
+def _rule_based_classification(text: str) -> Dict[str, object]:
     lowered = text.lower()
-
-    def _matches(keywords: List[str]) -> bool:
-        return any(kw in lowered for kw in keywords)
-
-    rules = [
-        ("bleeding", ["bleed", "blood", "cut", "lacer", "wound", "gash", "hemorrh"]),
-        ("burn", ["burn", "scald", "blister", "char" ]),
-        ("choking", ["chok", "can't breathe", "cant breathe", "airway", "heimlich"]),
-        ("allergic reaction", ["allergic", "anaphyl", "hives", "swelling" ]),
-        ("bruise", ["bruise", "contusion" ]),
-        ("sprain", ["sprain", "strain", "twist" ]),
-        ("fracture", ["fracture", "broken bone", "break" ]),
-        ("fainting", ["faint", "passed out", "dizzy", "lightheaded" ]),
-        ("headache", ["headache", "migraine" ]),
-    ]
-
     category = "unknown"
     matched_keywords: List[str] = []
-    for label, keywords in rules:
-        if _matches(keywords):
+    for label, keywords in _CATEGORY_RULES:
+        if any(keyword in lowered for keyword in keywords):
             category = label
-            matched_keywords = list(keywords)
+            matched_keywords = keywords[:3]
             break
 
     severity = "low"
-    if _matches(["severe", "heavy", "spurting", "gushing", "can't breathe", "cant breathe", "unconscious", "not breathing", "numb", "no feeling"]):
+    if category in _SEVERITY_HINTS:
+        severity = _SEVERITY_HINTS[category]
+    elif any(term in lowered for term in ("severe", "heavy", "worse", "worsening", "can't breathe", "cant breathe")):
         severity = "high"
-    elif _matches(["worse", "swelling", "getting worse", "bad", "painful", "deep", "large", "can't move", "cant move"]):
+    elif any(term in lowered for term in ("swelling", "bad", "painful", "deep", "large")):
         severity = "medium"
 
-    if category in {"choking", "allergic reaction", "fracture"}:
-        severity = "high"
-    elif category in {"bleeding", "burn", "sprain"} and severity == "low":
-        severity = "medium"
-
-    keywords = matched_keywords[:3] if matched_keywords else []
-
-    return {"category": category, "severity": severity, "keywords": keywords}
+    return {"category": category, "severity": severity, "keywords": matched_keywords}
 
 
-def classify(text: str) -> Dict:
-    content = None
-    try:
-        url = GROQ_CHAT_URL if MODEL_PREFERENCE == "groq" else OPENAI_CHAT_URL
-        token = GROQ_API_KEY if MODEL_PREFERENCE == 'groq' else OPENAI_API_KEY
-        if not token:
-            raise RuntimeError("Missing API key for selected provider")
-        headers = {"Authorization": f"Bearer {token}"}
-        model = "llama-3.1-70b-versatile" if MODEL_PREFERENCE == "groq" else "gpt-4o-mini"
-        resp = requests.post(url, headers=headers, json={
-            "model": model,
-            "messages": [
-                {"role":"system","content": SYSTEM},
-                {"role":"user","content": f"Text: {text}\nReturn JSON only."}
-            ],
-            "temperature": 0.1
-        }, timeout=15)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-    except Exception as exc:
-        logging.warning("Classification failed: %s", exc)
+def classify(text: str) -> Dict[str, object]:
+    """Maintain compatibility for callers needing triage metadata."""
 
-    import json
-    data: Dict = {"category": "unknown", "severity": "low", "keywords": []}
-    if content:
-        try:
-            data = json.loads(content)
-        except Exception as parse_exc:
-            logging.debug("Failed to parse classifier response %s: %s", content, parse_exc)
+    gate = classify_text(text)
+    if not gate.get("is_first_aid"):
+        return {
+            "category": "out_of_scope",
+            "severity": "low",
+            "keywords": [],
+            "confidence": gate.get("confidence", 0.0),
+        }
 
-    fallback = _rule_based_classification(text)
+    triage = _rule_based_classification(text)
+    triage["confidence"] = gate.get("confidence", 0.0)
+    triage["label"] = gate.get("label", "")
+    return triage
 
-    category_value = str(data.get("category", "")).strip()
-    generic_categories = {"unknown", "", "emergency", "medical emergency", "concern", "issue", "situation"}
 
-    if not category_value or category_value.lower() in generic_categories:
-        data.update(fallback)
-    elif fallback.get("keywords") and not data.get("keywords"):
-        data["keywords"] = fallback["keywords"]
-
-    if not data.get("category"):
-        data["category"] = fallback.get("category")
-
-    severity = str(data.get("severity", "")).lower()
-    if severity not in {"low", "medium", "high"}:
-        data["severity"] = fallback["severity"]
-
-    if data.get("category") and isinstance(data["category"], str):
-        data["category"] = data["category"].strip()
-
-    return data
+__all__ = ["classify_text", "classify"]

@@ -1,15 +1,15 @@
 # main.py
 # FastAPI app exposing chat endpoint for the client.
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 import requests
 from .config import (
     MODEL_PREFERENCE, has_openai, has_groq, has_astra,
     ASTRA_DB_API_ENDPOINT, ASTRA_DB_KEYSPACE, ASTRA_DB_COLLECTION
 )
 from pydantic import BaseModel
-from .agents import conversational_agent, recovery_agent
+from .agents import conversational_agent, recovery_agent, security_agent, emergency_classifier
 from .utils import is_first_aid_related
-from typing import List, Optional, Literal
+from typing import Annotated, List, Optional, Literal
 from textwrap import dedent
 import re
 
@@ -25,6 +25,41 @@ class ChatMessage(BaseModel):
 class ChatContinueRequest(BaseModel):
     messages: List[ChatMessage]
     session_id: Optional[str] = None
+
+
+FIRST_AID_ONLY_MESSAGE = "This assistant can only respond to first-aid emergencies and treatments."
+
+
+def _latest_user_message(messages: List[ChatMessage]) -> Optional[ChatMessage]:
+    for message in reversed(messages):
+        if message.role == "user":
+            return message
+    return None
+
+
+def validate_first_aid_intent(payload: ChatContinueRequest) -> ChatContinueRequest:
+    latest_user = _latest_user_message(payload.messages)
+    if latest_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=FIRST_AID_ONLY_MESSAGE,
+        )
+
+    screen = security_agent.safety_screen(latest_user.content)
+    if not screen.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=screen.get("reason") or FIRST_AID_ONLY_MESSAGE,
+        )
+
+    classification = emergency_classifier.classify_text(screen.get("sanitized", latest_user.content))
+    if not classification.get("is_first_aid"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=FIRST_AID_ONLY_MESSAGE,
+        )
+
+    return payload
 
 
 def _normalize_steps(steps) -> str:
@@ -429,13 +464,13 @@ def health_details():
     return details
 
 
+ValidatedChatRequest = Annotated[ChatContinueRequest, Depends(validate_first_aid_intent)]
+
+
 @app.post("/api/chat/continue")
-def chat_continue(req: ChatContinueRequest):
-    # Find the latest user message
-    user_msgs = [m for m in req.messages if m.role == 'user']
-    if not user_msgs:
-        return {"ok": False, "error": "No user message provided"}
-    last_user = user_msgs[-1].content
+def chat_continue(req: ValidatedChatRequest):
+    # Find the latest user message (dependency already ensured a user turn exists)
+    last_user = next(m.content for m in reversed(req.messages) if m.role == "user")
 
     # Run existing pipeline on the last user message
     history_payload = [m.dict() for m in req.messages]
@@ -444,6 +479,12 @@ def chat_continue(req: ChatContinueRequest):
         history=history_payload,
         session_id=req.session_id,
     )
+
+    if isinstance(result, dict) and result.get("rejected"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("reason", FIRST_AID_ONLY_MESSAGE),
+        )
 
     # Compose assistant-style message
     recovery_info = result.get("recovery") if isinstance(result, dict) else None
