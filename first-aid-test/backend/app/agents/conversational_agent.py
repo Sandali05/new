@@ -64,6 +64,7 @@ def handle_message(
 
         latest_security = security_agent.protect(user_input)
         sanitized_latest = latest_security.get("sanitized", user_input)
+        security_scope_hint = latest_security.get("in_scope")
 
         # 2) Emergency classification
         triage = emergency_classifier.classify(sanitized_latest)
@@ -72,6 +73,10 @@ def handle_message(
         recovery = recovery_agent.detect(history or [], user_input)
 
         in_scope = is_first_aid_related(sanitized_latest, triage)
+        if security_scope_hint is False:
+            in_scope = False
+        elif security_scope_hint is True:
+            in_scope = True
 
         em_numbers, maps_hint = {}, {}
         instructions = {"steps": []}

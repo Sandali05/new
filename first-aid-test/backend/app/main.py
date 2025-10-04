@@ -267,7 +267,11 @@ def _compose_assistant_message(
     triage = result.get("triage", {})
     sanitized_latest = result.get("security", {}).get("latest_sanitized", user_text)
 
-    if not is_first_aid_related(sanitized_latest, triage):
+    conversation_scope = conversation_meta.get("in_scope")
+    if conversation_scope is None:
+        conversation_scope = is_first_aid_related(sanitized_latest, triage)
+
+    if not conversation_scope:
         return dedent("""
             I’m built to help with first-aid concerns. If you have a medical question or emergency, please share the symptoms or injuries you’re experiencing.
         """).strip()

@@ -10,7 +10,8 @@ FIRST_AID_KEYWORDS = {
     "broken", "break", "dizzy", "faint", "choke", "choking", "allergic",
     "anaphylaxis", "sting", "bite", "rash", "fever", "headache",
     "migraine", "breathing", "trouble breathing", "emergency",
-    "first aid", "ambulance",
+    "first aid", "ambulance", "wheeze", "seizure", "bleeder", "hemorrhage",
+    "poison", "poisoning", "stroke", "heart", "cardiac", "cpr",
 }
 
 GENERIC_TRIAGE_CATEGORIES = {
@@ -29,6 +30,30 @@ def chunk_text(text: str, limit_tokens: int = 500, approx_chars_per_token: int =
     return [text[i:i+max_len] for i in range(0, len(text), max_len)]
 
 
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z]+", text.lower())
+
+
+def _keyword_mentions_first_aid(keyword: str) -> bool:
+    if not keyword:
+        return False
+    normalized = keyword.lower().strip()
+    if not normalized:
+        return False
+
+    if normalized in FIRST_AID_KEYWORDS:
+        return True
+
+    tokens = _tokenize(normalized)
+    if any(token in FIRST_AID_KEYWORDS for token in tokens):
+        return True
+
+    return any(
+        len(root) >= 4 and root in normalized
+        for root in FIRST_AID_KEYWORDS
+    )
+
+
 def is_first_aid_related(user_text: str, triage: Optional[Dict]) -> bool:
     """Return True if the text appears to describe a first-aid concern."""
 
@@ -41,12 +66,17 @@ def is_first_aid_related(user_text: str, triage: Optional[Dict]) -> bool:
             (triage.get("category") or triage.get("emergency") or "")
         ).lower()
         if category and category not in GENERIC_TRIAGE_CATEGORIES:
-            return True
+            if _keyword_mentions_first_aid(category):
+                return True
 
         triage_keywords = triage.get("keywords") or []
         for keyword in triage_keywords:
-            if isinstance(keyword, str) and keyword:
-                if re.search(rf"\b{re.escape(keyword.lower())}\b", lowered):
-                    return True
+            if not isinstance(keyword, str) or not keyword:
+                continue
+            if not _keyword_mentions_first_aid(keyword):
+                continue
+            keyword_tokens = _tokenize(keyword)
+            if any(re.search(rf"\b{re.escape(token)}\b", lowered) for token in keyword_tokens):
+                return True
 
     return False
