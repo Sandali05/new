@@ -14,6 +14,17 @@ RECOVERY_PATTERNS: List[str] = [
     r"\bbleeding (?:has )?stopped\b",
     r"\b(?:pain|hurting|bleeding) (?:has )?stopped\b",
     r"\bit'?s healed now\b",
+    r"\byes(?:,)? it (?:has )?stopped\b",
+    r"\byep(?:,)? it (?:has )?stopped\b",
+]
+
+CONFIRMATION_ONLY_PATTERNS: List[str] = [
+    r"\byes\b",
+    r"\byeah\b",
+    r"\byep\b",
+    r"\bthanks\b",
+    r"\bthank you\b",
+    r"\bappreciate it\b",
 ]
 
 MessageLike = Union[Dict[str, str], object]
@@ -31,17 +42,22 @@ def _extract_user_content(message: MessageLike) -> Optional[str]:
     return getattr(message, "content", "") or ""
 
 
-def _gather_recent_text(history: Optional[Iterable[MessageLike]], latest_input: str) -> str:
-    """Combine recent user turns with the latest user input."""
-    texts: List[str] = []
-    if history:
-        for item in history:
-            content = _extract_user_content(item)
-            if content:
-                texts.append(content)
-    if latest_input:
-        texts.append(latest_input)
-    return "\n".join(texts).strip()
+def _extract_previous_user_text(
+    history: Optional[Iterable[MessageLike]], latest_input: str
+) -> Optional[str]:
+    """Return the most recent user-authored text preceding the latest input."""
+    if not history:
+        return None
+
+    prev: Optional[str] = None
+    for item in history:
+        content = _extract_user_content(item)
+        if content is not None:
+            prev = content
+
+    if prev == latest_input:
+        return None
+    return prev
 
 
 def detect(history: Optional[Iterable[MessageLike]], latest_input: str) -> Dict[str, object]:
@@ -50,11 +66,25 @@ def detect(history: Optional[Iterable[MessageLike]], latest_input: str) -> Dict[
     Returns a dictionary so downstream callers can attach this agent's
     observations to their own payloads.
     """
-    combined = _gather_recent_text(history, latest_input)
-    lowered = combined.lower()
-    matches: List[str] = [pattern for pattern in RECOVERY_PATTERNS if re.search(pattern, lowered)]
+    latest_lower = (latest_input or "").lower()
+    matches: List[str] = [
+        pattern for pattern in RECOVERY_PATTERNS if re.search(pattern, latest_lower)
+    ]
+
+    if not matches:
+        # Handle short acknowledgements that follow a recovery phrase in the
+        # immediately previous user turn (for example "yes" or "thanks").
+        prev_text = _extract_previous_user_text(history, latest_input)
+        prev_lower = (prev_text or "").lower()
+        if prev_lower and any(
+            re.search(pattern, prev_lower) for pattern in RECOVERY_PATTERNS
+        ) and any(
+            re.fullmatch(pattern, latest_lower.strip()) for pattern in CONFIRMATION_ONLY_PATTERNS
+        ):
+            matches = [pattern for pattern in RECOVERY_PATTERNS if re.search(pattern, prev_lower)]
+
     return {
         "recovered": bool(matches),
         "matches": matches,
-        "window": combined,
+        "window": latest_input,
     }

@@ -39,6 +39,21 @@ BODY_PART_KEYWORDS = {
     "leg", "knee", "ankle", "foot", "toe", "skin"
 }
 
+FIRST_AID_KEYWORDS = {
+    "bleed", "bleeding", "blood", "cut", "wound", "injury", "hurt",
+    "pain", "ache", "aching", "burn", "scald", "bruise", "fracture",
+    "sprain", "strain", "twist", "swelling", "numb", "tingling",
+    "broken", "break", "dizzy", "faint", "choke", "choking", "allergic",
+    "anaphylaxis", "sting", "bite", "rash", "fever", "headache",
+    "migraine", "breathing", "trouble breathing", "emergency",
+    "first aid", "ambulance"
+}
+
+GENERIC_TRIAGE_CATEGORIES = {
+    "", "unknown", "concern", "issue", "situation", "emergency",
+    "medical emergency", "non-urgent"
+}
+
 TREND_PATTERNS = {
     "worse": [
         r"\bgetting worse\b",
@@ -159,6 +174,28 @@ def _detect_location_known(text: str) -> bool:
     return any(re.search(rf"\b{re.escape(part)}\b", lowered) for part in BODY_PART_KEYWORDS)
 
 
+def _is_first_aid_related(user_text: str, triage: dict) -> bool:
+    """Determine if the latest user text is about a first-aid concern."""
+    lowered = (user_text or "").lower()
+    if any(re.search(rf"\b{re.escape(keyword)}\b", lowered) for keyword in FIRST_AID_KEYWORDS):
+        return True
+
+    category = str(
+        (triage.get("category") or triage.get("emergency") or "") if isinstance(triage, dict) else ""
+    ).lower()
+    if category and category not in GENERIC_TRIAGE_CATEGORIES:
+        return True
+
+    triage_keywords = triage.get("keywords") if isinstance(triage, dict) else []
+    if triage_keywords:
+        for keyword in triage_keywords:
+            if isinstance(keyword, str) and keyword:
+                if re.search(rf"\b{re.escape(keyword.lower())}\b", lowered):
+                    return True
+
+    return False
+
+
 def _detect_trend(text: str) -> Optional[str]:
     if not text:
         return None
@@ -263,6 +300,14 @@ def _compose_assistant_message(
             I’m really glad to hear things are feeling better now. If anything changes or the symptoms return, reach out to a healthcare professional or call your local emergency number. Take care!
         """).strip()
 
+    triage = result.get("triage", {})
+    sanitized_latest = result.get("security", {}).get("latest_sanitized", user_text)
+
+    if not _is_first_aid_related(sanitized_latest, triage):
+        return dedent("""
+            I’m built to help with first-aid concerns. If you have a medical question or emergency, please share the symptoms or injuries you’re experiencing.
+        """).strip()
+
     if conversation_meta.get("needs_clarification"):
         prompt = conversation_meta.get("clarification_prompt")
         if prompt:
@@ -271,7 +316,6 @@ def _compose_assistant_message(
             "I want to be sure I understand the situation. Could you share what happened, where it hurts, and how severe it is?"
         )
 
-    triage = result.get("triage", {})
     severity = triage.get("severity") or triage.get("level") or "unknown"
     category = triage.get("category") or triage.get("emergency") or "concern"
 
