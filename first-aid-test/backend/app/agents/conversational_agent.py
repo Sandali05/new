@@ -13,6 +13,7 @@ from . import (
 from ..services import mcp_server
 import logging
 from ..services.risk_confidence import score_risk_confidence
+from ..utils import is_first_aid_related
 
 
 KNOWN_EMERGENCY_TERMS = {
@@ -70,49 +71,58 @@ def handle_message(
         # 2b) Detect recovery cues so downstream components can conclude safely.
         recovery = recovery_agent.detect(history or [], user_input)
 
-        # 3) Get external tools via MCP-like adapter
+        in_scope = is_first_aid_related(sanitized_latest, triage)
+
         em_numbers, maps_hint = {}, {}
-        try:
-            em_numbers = mcp_server.get_emergency_numbers()
-            maps_hint = mcp_server.get_location_from_maps("nearest hospital")
-        except Exception as e:
-            logging.warning(f"Error getting tools from MCP server: {e}")
-            # Default values are already set, so we can just log and continue
-
-        # 4) Generate first aid instructions grounded on KB
-        instructions = instruction_agent.generate(
-            sanitized_latest,
-            category=str(triage.get("category") or ""),
-            severity=str(triage.get("severity") or ""),
-        )
-
-        # 5) Verify against guardrails
-        instruction_steps = instructions.get("steps")
-        if not instruction_steps:
-            raise ValueError("Instruction agent did not return 'steps'")
-        ver = verification_agent.verify(instruction_steps)
-
-        # 6) Score risk & confidence
-        risk = score_risk_confidence(triage, ver)
-
-        clarification_prompt = _detect_clarification_prompt(user_input)
-        needs_clarification = clarification_prompt is not None
+        instructions = {"steps": []}
+        verification_result = {"passed": True, "skipped": not in_scope}
 
         conversation_meta = {
             "context": context_text,
-            "needs_clarification": needs_clarification,
-            "clarification_prompt": clarification_prompt,
+            "recovered": recovery.get("recovered"),
+            "in_scope": in_scope,
+            "needs_clarification": False,
+            "clarification_prompt": None,
         }
         if session_id:
             conversation_meta["session_id"] = session_id
-        conversation_meta["recovered"] = recovery.get("recovered")
+
+        if in_scope:
+            # 3) Get external tools via MCP-like adapter
+            try:
+                em_numbers = mcp_server.get_emergency_numbers()
+                maps_hint = mcp_server.get_location_from_maps("nearest hospital")
+            except Exception as e:
+                logging.warning(f"Error getting tools from MCP server: {e}")
+                # Default values are already set, so we can just log and continue
+
+            # 4) Generate first aid instructions grounded on KB
+            instructions = instruction_agent.generate(
+                sanitized_latest,
+                category=str(triage.get("category") or ""),
+                severity=str(triage.get("severity") or ""),
+            )
+
+            # 5) Verify against guardrails
+            instruction_steps = instructions.get("steps")
+            if not instruction_steps:
+                raise ValueError("Instruction agent did not return 'steps'")
+            verification_result = verification_agent.verify(instruction_steps)
+
+            clarification_prompt = _detect_clarification_prompt(user_input)
+            needs_clarification = clarification_prompt is not None
+            conversation_meta["needs_clarification"] = needs_clarification
+            conversation_meta["clarification_prompt"] = clarification_prompt
+
+        # 6) Score risk & confidence
+        risk = score_risk_confidence(triage, verification_result)
 
         response: Dict = {
             "security": {**sec, "latest_sanitized": sanitized_latest},
             "triage": triage,
             "tools": {"emergency_numbers": em_numbers, "maps": maps_hint},
             "instructions": instructions,
-            "verification": ver,
+            "verification": verification_result,
             "risk_confidence": risk,
             "conversation": conversation_meta,
             "recovery": recovery,
