@@ -238,36 +238,70 @@ body {
 .messages {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
+  padding: 4px 6px;
+  max-height: 440px;
+  overflow-y: auto;
 }
 
 .message {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  max-width: 72%;
 }
 
-.message label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #6b6b80;
+.message.assistant {
+  align-self: flex-start;
+  text-align: left;
+}
+
+.message.user {
+  align-self: flex-end;
+  text-align: right;
 }
 
 .message-content {
-  padding: 14px 16px;
-  border-radius: 16px;
-  line-height: 1.55;
+  padding: 16px 20px;
+  border-radius: 22px;
+  line-height: 1.6;
   white-space: pre-wrap;
+  font-size: 15px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
 }
 
 .message.assistant .message-content {
   background: #f5f1ff;
   border: 1px solid #e5dcff;
+  border-top-left-radius: 8px;
 }
 
 .message.user .message-content {
-  background: #ffffff;
-  border: 1px solid #eceef5;
+  background: #ffe9f1;
+  border: 1px solid #ffd0df;
+  border-top-right-radius: 8px;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #8c8ca6;
+  letter-spacing: 0.01em;
+}
+
+.message.assistant .message-meta {
+  justify-content: flex-start;
+}
+
+.message.user .message-meta {
+  justify-content: flex-end;
+}
+
+.message-author {
+  font-weight: 600;
+  color: #4a4a6a;
 }
 
 .input-card {
@@ -344,7 +378,46 @@ type QuickVideo = {
   description: string
 }
 
+type DisplayMessage = ChatMessage & {
+  id: string
+  timestamp: Date
+}
+
 const mapSearchUrl = 'https://www.google.com/maps/search/nearest+hospitals%2Fmedi+help/'
+
+const generateId = () => Math.random().toString(36).slice(2, 10)
+
+const createDisplayMessage = (message: ChatMessage, timestamp?: Date): DisplayMessage => ({
+  ...message,
+  id: `${message.role}-${generateId()}`,
+  timestamp: timestamp ?? new Date()
+})
+
+const reconcileMessages = (
+  existing: DisplayMessage[],
+  incoming: ChatMessage[]
+): DisplayMessage[] => {
+  const pool = [...existing]
+
+  return incoming.map(message => {
+    const matchIndex = pool.findIndex(
+      candidate => candidate.role === message.role && candidate.content === message.content
+    )
+
+    if (matchIndex >= 0) {
+      const [match] = pool.splice(matchIndex, 1)
+      return match
+    }
+
+    return createDisplayMessage(message)
+  })
+}
+
+const formatTimestamp = (value: Date) =>
+  value.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 
 export default function App() {
   useEffect(() => {
@@ -358,7 +431,7 @@ export default function App() {
   }, [])
 
   const [input, setInput] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -383,24 +456,71 @@ export default function App() {
     []
   )
 
+  const defaultConversation = useMemo(
+    () => [
+      createDisplayMessage(
+        {
+          role: 'assistant',
+          content: "I'm your First-Aid Guide. Who needs help and where are you?"
+        },
+        new Date('2024-04-10T09:12:00')
+      ),
+      createDisplayMessage(
+        {
+          role: 'user',
+          content: "Adult with a cut on the forearm. We're at the park."
+        },
+        new Date('2024-04-10T09:18:00')
+      ),
+      createDisplayMessage(
+        {
+          role: 'assistant',
+          content:
+            "Apply direct pressure with clean cloth for 5–10 minutes. Elevate the arm if possible. I'll show nearby clinics on the map."
+        },
+        new Date('2024-04-10T09:19:00')
+      ),
+      createDisplayMessage(
+        {
+          role: 'user',
+          content: 'CPR steps'
+        },
+        new Date('2024-04-10T09:39:00')
+      )
+    ],
+    []
+  )
+
   const onSend = async () => {
-    if (!input.trim()) return
+    const trimmed = input.trim()
+    if (!trimmed) return
+
     setLoading(true)
     setError(null)
+
+    const userChatMessage: ChatMessage = { role: 'user', content: trimmed }
+    const history = [
+      ...messages.map(({ role, content }) => ({ role, content })),
+      userChatMessage
+    ]
+    const userDisplayMessage = createDisplayMessage(userChatMessage)
+
+    setMessages(prev => [...prev, userDisplayMessage])
+
     try {
-      const userMsg: ChatMessage = { role: 'user', content: input }
-      const next = [...messages, userMsg]
-      setMessages(next)
-      const data = await continueChat(next)
-      setMessages(data.messages)
+      const data = await continueChat(history)
+      setMessages(prev => reconcileMessages(prev, data.messages))
+      setInput('')
     } catch (err) {
       setError('Failed to get a response from the assistant. Please try again.')
+      setMessages(prev => prev.filter(message => message.id !== userDisplayMessage.id))
       console.error(err)
     } finally {
       setLoading(false)
-      setInput('')
     }
   }
+
+  const activeMessages = messages.length === 0 ? defaultConversation : messages
 
   return (
     <div className="chat-app">
@@ -486,21 +606,21 @@ export default function App() {
               </div>
 
               <div className="messages">
-                {messages.length === 0 ? (
-                  <div className="message assistant">
-                    <label>Assistant</label>
-                    <div className="message-content">
-                      Hi! I&apos;m your First-Aid guide. Who needs help and where are you?
+                {activeMessages.map(message => (
+                  <div key={message.id} className={`message ${message.role}`}>
+                    <div className="message-content">{message.content}</div>
+                    <div className="message-meta">
+                      <span className="message-author">
+                        {message.role === 'assistant'
+                          ? 'Assistant'
+                          : message.role === 'user'
+                          ? 'You'
+                          : 'System'}
+                      </span>
+                      <span>{formatTimestamp(message.timestamp)}</span>
                     </div>
                   </div>
-                ) : (
-                  messages.map((m, idx) => (
-                    <div key={idx} className={`message ${m.role}`}>
-                      <label>{m.role === 'assistant' ? 'Assistant' : m.role === 'user' ? 'You' : 'System'}</label>
-                      <div className="message-content">{m.content}</div>
-                    </div>
-                  ))
-                )}
+                ))}
               </div>
             </section>
 
