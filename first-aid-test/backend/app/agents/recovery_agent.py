@@ -6,8 +6,11 @@ import re
 RECOVERY_PATTERNS: List[str] = [
     r"\ball good now\b",
     r"\ball better now\b",
-    r"\bfeeling (?:fine|okay|ok|better) now\b",
-    r"\bfeels? (?:fine|okay|ok|better) now\b",
+    r"\bfeeling (?:fine|okay|ok|better)(?: now| again)?\b",
+    r"\bfeels? (?:fine|okay|ok|better)(?: now| again)?\b",
+    r"\b(?:i'?m|i am|im) (?:feeling )?(?:fine|okay|ok|better)(?: now| again)?\b",
+    r"\bgetting better\b",
+    r"\b(?:i'?m|i am|im) getting better\b",
     r"\bno(?: longer| more)? (?:hurting|hurt|pain|bleeding)(?: anymore)?\b",
     r"\bnot (?:painful|hurting|bleeding) anymore\b",
     r"\bpain (?:is )?gone\b",

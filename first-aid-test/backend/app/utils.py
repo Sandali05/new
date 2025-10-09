@@ -5,7 +5,7 @@ import re
 
 FIRST_AID_KEYWORDS = {
     "bleed", "bleeding", "blood", "cut", "wound", "injury", "hurt",
-    "pain", "ache", "aching", "burn", "scald", "bruise", "fracture",
+    "pain", "ache", "aching", "burn", "scald", "blister", "bruise", "fracture",
     "sprain", "strain", "twist", "swelling", "numb", "tingling",
     "broken", "break", "dizzy", "faint", "choke", "choking", "allergic",
     "anaphylaxis", "sting", "bite", "rash", "fever", "headache",

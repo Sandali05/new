@@ -61,10 +61,16 @@ def handle_message(
 
         # 1) Security & privacy layer
         sec = security_agent.protect(context_text)
+        sanitized_context = sec.get("sanitized", context_text)
+        context_scope_hint = sec.get("in_scope")
+        context_classifier_gate = emergency_classifier.classify_text(
+            sanitized_context
+        )
 
         latest_security = security_agent.protect(user_input)
         sanitized_latest = latest_security.get("sanitized", user_input)
         security_scope_hint = latest_security.get("in_scope")
+        security_allowed = latest_security.get("allowed", True)
 
         classifier_gate = emergency_classifier.classify_text(sanitized_latest)
 
@@ -72,10 +78,15 @@ def handle_message(
         recovery = recovery_agent.detect(history or [], user_input)
 
         in_scope = classifier_gate.get("is_first_aid", False)
-        if security_scope_hint is False:
+        if not security_allowed:
             in_scope = False
-        elif security_scope_hint is True:
-            in_scope = True
+        else:
+            if security_scope_hint is True:
+                in_scope = True
+            if not in_scope and context_scope_hint:
+                in_scope = True
+            if not in_scope and context_classifier_gate.get("is_first_aid"):
+                in_scope = True
 
         conversation_meta = {
             "context": context_text,
@@ -84,6 +95,7 @@ def handle_message(
             "needs_clarification": False,
             "clarification_prompt": None,
             "classifier_gate": classifier_gate,
+            "context_classifier_gate": context_classifier_gate,
         }
         if session_id:
             conversation_meta["session_id"] = session_id
@@ -112,9 +124,19 @@ def handle_message(
 
         # 2) Emergency classification
         triage = emergency_classifier.classify(sanitized_latest)
+        if security_allowed:
+            triage_needs_context = triage.get("category") in {"out_of_scope", "unknown"}
+            triage_needs_context = triage_needs_context or not triage.get("keywords")
+            if triage_needs_context and context_classifier_gate.get("is_first_aid"):
+                triage = emergency_classifier.classify(sanitized_context)
 
         in_scope = is_first_aid_related(sanitized_latest, triage)
-        if security_scope_hint is False:
+        if not in_scope:
+            context_in_scope = is_first_aid_related(sanitized_context, triage)
+            if context_in_scope:
+                in_scope = True
+
+        if not security_allowed:
             in_scope = False
         elif security_scope_hint is True:
             in_scope = True

@@ -70,6 +70,8 @@ def protect(user_text: str) -> Dict:
         "sanitized": clean,
         "redactions": [],
         "in_scope": in_scope if screen.get("allowed", True) else False,
+        "allowed": screen.get("allowed", True),
+        "reason": screen.get("reason", ""),
     }
 
 

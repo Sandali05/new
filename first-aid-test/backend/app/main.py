@@ -54,6 +54,18 @@ def validate_first_aid_intent(payload: ChatContinueRequest) -> ChatContinueReque
 
     classification = emergency_classifier.classify_text(screen.get("sanitized", latest_user.content))
     if not classification.get("is_first_aid"):
+        user_turns = [m.content for m in payload.messages if m.role == "user"]
+        if len(user_turns) > 1:
+            context_text = "\n".join(user_turns[-3:]).strip()
+            if context_text and context_text != latest_user.content.strip():
+                context_screen = security_agent.safety_screen(context_text)
+                if context_screen.get("allowed", True):
+                    context_classification = emergency_classifier.classify_text(
+                        context_screen.get("sanitized", context_text)
+                    )
+                    if context_classification.get("is_first_aid"):
+                        return payload
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=FIRST_AID_ONLY_MESSAGE,
